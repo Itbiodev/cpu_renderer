@@ -216,7 +216,7 @@ fn draw_triangle3d(
 ) {
     let [bboxmin, bboxmax] = bounding_box3d(&triangle);
     for pixel_x in bboxmin[0] as usize..=bboxmax[1] as usize {
-        for pixel_y in bboxmin[1] as usize..=bboxmax[2] as usize {
+        for pixel_y in bboxmin[0] as usize..=bboxmax[1] as usize {
             let mut point = Vec3f::new(pixel_x as f32, pixel_y as f32, 0.);
             let [w, u, v] = barycentric3d(&triangle, &point);
             if w < 0. || u < 0. || v < 0. {
@@ -324,7 +324,7 @@ fn main() {
         for vertex in triangle {
             let x = (vertex.position()[0] + 1.) * (WIDTH as f32) / 2.;
             let y = (vertex.position()[1] + 1.) * (HEIGHT as f32) / 2.;
-            screen_triangle.push(Point::new(x as usize, y as usize));
+            screen_triangle.push(Vec3f::new(x , y, 0.));
             model_triangle.push(Vec3f::new(
                 vertex.position()[0],
                 vertex.position()[1],
@@ -337,8 +337,9 @@ fn main() {
         let n = n.normalize();
         let intensity = n * light_dir;
         if intensity > 0. {
-            draw_triangle_barycentric(
+            draw_triangle3d(
                 &screen_triangle,
+                &mut z_buffer,
                 &mut image,
                 &TGAColor::rgb(
                     (intensity * 255.) as u8,
