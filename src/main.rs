@@ -188,8 +188,30 @@ fn barycentric3d(triangle: &Triangle3d, point: &Vec3f) -> [f32; 3] {
     let m_b = (ap.clone() ^ ac.clone()) * k.clone();
     let m_c = (ab.clone() ^ ap.clone()) * k.clone();
     let den = u.clone() * k.clone();
-    if f32::abs(u.z) > 0.01 {
+    if f32::abs(den) > 0.001 {
         [1. - (m_b + m_c) / den, m_b / den, m_c / den]
+    } else {
+        [-1., 1., 1.]
+    }
+}
+
+fn barycentric(triangle: &Triangle3d, point: &Vec3f) -> [f32; 3] {
+    let mut s = [[0. as f32;3];2]; 
+    
+    s[1][0] = triangle[2].y - triangle[0].y; 
+    s[1][1] = triangle[1].y - triangle[0].y;
+    s[1][2] = triangle[0].y - point.y;
+
+    s[0][0] = triangle[2].x - triangle[0].x; 
+    s[0][1] = triangle[1].x - triangle[0].x;
+    s[0][2] = triangle[0].x - point.x;
+    
+    let u = Vec3f::new(s[0][0], s[0][1], s[0][2]);
+    let v = Vec3f::new(s[1][0], s[1][1], s[1][2]);
+
+    let w = u^v;
+    if f32::abs(w.z) > 0.01 {
+        [ 1.-(w.x+w.y)/w.z, w.y/w.z, w.x/w.z ]
     } else {
         [-1., 1., 1.]
     }
@@ -215,8 +237,8 @@ fn draw_triangle3d(
     color: &TGAColor,
 ) {
     let [bboxmin, bboxmax] = bounding_box3d(&triangle);
-    for pixel_x in bboxmin[0] as usize..=bboxmax[1] as usize {
-        for pixel_y in bboxmin[0] as usize..=bboxmax[1] as usize {
+    for pixel_x in bboxmin[0] as usize..=bboxmax[0] as usize {
+        for pixel_y in bboxmin[1] as usize..=bboxmax[1] as usize {
             let mut point = Vec3f::new(pixel_x as f32, pixel_y as f32, 0.);
             let [w, u, v] = barycentric3d(&triangle, &point);
             if w < 0. || u < 0. || v < 0. {
