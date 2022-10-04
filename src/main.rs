@@ -5,8 +5,8 @@ use std::ops::{Add, BitXor, Div, Mul, Sub};
 use tgaimage::*;
 use wavefront::Obj;
 
-const WIDTH: f32 = 800.;
-const HEIGHT: f32 = 800.;
+const WIDTH: usize = 800;
+const HEIGHT: usize = 800;
 
 struct Interval {
     start: f32,
@@ -128,8 +128,8 @@ type BoxCorners<T> = [Point<T>; 2];
 fn bounding_box(triangle: &Triangle<usize>) -> BoxCorners<usize> {
     // let lower_corner = Point { x: 0, y: 0 };
     let upper_corner = Point {
-        x: WIDTH as usize - 1,
-        y: HEIGHT as usize - 1,
+        x: WIDTH - 1,
+        y: HEIGHT - 1,
     };
 
     let mut bboxmax = Point { x: 0, y: 0 };
@@ -156,12 +156,12 @@ fn barycentric_coords(triangle: &Triangle<usize>, point: &Point<usize>) -> [f32;
     let (x3, y3) = (c.x as f32, c.y as f32);
 
     let det = x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2);
-    if det < 1. {
+    if f32::abs(det) < 1. {
         return [-1., 1., 1.];
     }
-    let u = (x3 * y1 - x1 * y3) * 1. + (y3 - y1) * x + (x1 - x3) * y;// / det;
-    let v = (x1 * y2 - x2 * y1) * 1. + (y1 - y2) * x + (x2 - x1) * y;// / det;
-    [1. - (u + v)/det, u/det, v/det]
+    let u = (x3 * y1 - x1 * y3) * 1. + (y3 - y1) * x + (x1 - x3) * y; // / det;
+    let v = (x1 * y2 - x2 * y1) * 1. + (y1 - y2) * x + (x2 - x1) * y; // / det;
+    [1. - (u + v) / det, u / det, v / det]
 }
 
 fn draw_triangle_barycentric(triangle: &Triangle<usize>, image: &mut TGAImage, color: &TGAColor) {
@@ -176,6 +176,63 @@ fn draw_triangle_barycentric(triangle: &Triangle<usize>, image: &mut TGAImage, c
         }
     }
 }
+
+// TODO: Improve ASAP
+type Triangle3d = Vec<Vec3f>;
+fn barycentric3d(triangle: &Triangle3d, point: &Vec3f) -> [f32; 3] {
+    let ab = triangle[0].clone() - triangle[1].clone();
+    let ac = triangle[0].clone() - triangle[2].clone();
+    let ap = triangle[0].clone() - point.clone();
+    let u = ab.clone() ^ ac.clone();
+    let k = Vec3f::new(0., 0., 1.);
+    let m_b = (ap.clone() ^ ac.clone()) * k.clone();
+    let m_c = (ab.clone() ^ ap.clone()) * k.clone();
+    let den = u.clone() * k.clone();
+    if f32::abs(u.z) > 0.01 {
+        [1. - (m_b + m_c) / den, m_b / den, m_c / den]
+    } else {
+        [-1., 1., 1.]
+    }
+}
+
+fn bounding_box3d(triangle: &Triangle3d) -> [[f32; 2]; 2] {
+    let mut bboxmin = [f32::MAX, f32::MAX];
+    let mut bboxmax = [-f32::MAX, -f32::MAX];
+    let clamp = [WIDTH as f32 - 1., HEIGHT as f32 - 1.];
+    for vertex in triangle {
+        bboxmin[0] = f32::max(0., f32::min(bboxmin[0], vertex.x));
+        bboxmin[1] = f32::max(0., f32::min(bboxmin[1], vertex.y));
+        bboxmax[0] = f32::min(clamp[0], f32::max(bboxmax[0], vertex.x));
+        bboxmax[1] = f32::min(clamp[1], f32::max(bboxmax[1], vertex.y));
+    }
+    [bboxmin, bboxmax]
+}
+
+fn draw_triangle3d(
+    triangle: &Triangle3d,
+    z_buffer: &mut [f32],
+    image: &mut TGAImage,
+    color: &TGAColor,
+) {
+    let [bboxmin, bboxmax] = bounding_box3d(&triangle);
+    for pixel_x in bboxmin[0] as usize..=bboxmax[1] as usize {
+        for pixel_y in bboxmin[1] as usize..=bboxmax[2] as usize {
+            let mut point = Vec3f::new(pixel_x as f32, pixel_y as f32, 0.);
+            let [w, u, v] = barycentric3d(&triangle, &point);
+            if w < 0. || u < 0. || v < 0. {
+                continue;
+            }
+            for (i, coord) in [w, u, v].into_iter().enumerate() {
+                point.z += coord * triangle[i].z;
+            }
+            if  z_buffer[pixel_x + pixel_y*WIDTH] < point.z {
+                z_buffer[pixel_x + pixel_y*WIDTH] = point.z;
+                image.set(pixel_x, pixel_y, &color);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Vec3f {
     x: f32,
@@ -239,21 +296,34 @@ impl Sub for Vec3f {
     }
 }
 
+impl Add for Vec3f {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            x: self.x + rhs.x,
+            y: self.y + rhs.y,
+            z: self.z + rhs.z,
+        }
+    }
+}
+
 fn main() {
-    let mut image = TGAImage::new(WIDTH as usize, HEIGHT as usize, 3);
+    let mut image = TGAImage::new(WIDTH, HEIGHT, 3);
     // let red = TGAColor::rgb(255, 0, 0);
     let white = TGAColor::rgb(255, 255, 255);
 
     let model = Obj::from_file("./african_head.obj").unwrap();
-
+    let mut z_buffer = [-f32::MAX; WIDTH * HEIGHT];
     for triangle in model.triangles() {
         let light_dir = Vec3f::new(0., 0., -1.);
+
+        // https://users.rust-lang.org/t/what-is-a-more-efficient-way-to-clear-a-vec/40190
         let mut screen_triangle = Vec::with_capacity(3); // What's the correct way
         let mut model_triangle = Vec::with_capacity(3); // What's the correct way
 
         for vertex in triangle {
-            let x = (vertex.position()[0] + 1.) * WIDTH / 2.;
-            let y = (vertex.position()[1] + 1.) * HEIGHT / 2.;
+            let x = (vertex.position()[0] + 1.) * (WIDTH as f32) / 2.;
+            let y = (vertex.position()[1] + 1.) * (HEIGHT as f32) / 2.;
             screen_triangle.push(Point::new(x as usize, y as usize));
             model_triangle.push(Vec3f::new(
                 vertex.position()[0],
