@@ -9,6 +9,9 @@ edition = "2021"
 tgaimage = "0.1.1"
 wavefront = { path = "../wavefront/" }
 rand = "0.8"
+forward_ref_generic = "0.2.1"
+libm = "0.2.5"
+nalgebra = "0.31.1"
 
 [profile.release]
 debug = true

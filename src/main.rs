@@ -1,35 +1,16 @@
-use rand::Rng;
+mod geometry;
+mod shaders;
+
+use libm::fabs;
+use nalgebra::*;
 use std::cmp::{max, min};
 use std::mem;
-use std::ops::{Add, BitXor, Div, Mul, Sub};
 use tgaimage::*;
-use wavefront::Obj;
+use wavefront::{Obj, Vertex};
 
 const WIDTH: usize = 800;
 const HEIGHT: usize = 800;
-
-struct Interval {
-    start: f32,
-    end: f32,
-}
-
-impl Interval {
-    fn new(a: f32, b: f32) -> Self {
-        Self { start: a, end: b }
-    }
-
-    fn transform(&self, x: f32, J: &Interval) -> Result<f32, String> {
-        if !(x > self.end || x < self.start) {
-            let y = (J.end - J.start) * (x - self.start) / (self.end - self.start) + J.start;
-            Ok(y)
-        } else {
-            Err(format!(
-                "point {}, is not in the interval ({},{})",
-                x, self.start, self.end
-            ))
-        }
-    }
-}
+const DEPTH: usize = 255;
 
 #[derive(Debug, Clone)]
 struct Point<T> {
@@ -46,22 +27,6 @@ where
     }
 }
 
-/*impl<T> Add for Point<T>
-where
-    T: Add + Copy,
-    T::Output: Add + Copy,
-{
-    type Output = Point<T::Output>;
-
-    fn add(self, rhs: Point<T>) -> Point<T::Output> {
-        Point {
-            x: self.x + rhs.y,
-            y: self.y + rhs.y,
-        }
-    }
-}*/
-
-type TGAPoint = Point<usize>;
 fn line(p0: &Point<usize>, p1: &Point<usize>, image: &mut TGAImage, color: &TGAColor) {
     let mut x0 = p0.x;
     let mut y0 = p0.y;
@@ -109,7 +74,7 @@ fn line(p0: &Point<usize>, p1: &Point<usize>, image: &mut TGAImage, color: &TGAC
     }*/
 }
 
-fn draw_triangle(
+fn draw_triangle_with_lines(
     p0: &Point<usize>,
     p1: &Point<usize>,
     p2: &Point<usize>,
@@ -122,9 +87,8 @@ fn draw_triangle(
 }
 
 type Triangle<T> = Vec<Point<T>>; //[Point<T>; 3];
-
 type BoxCorners<T> = [Point<T>; 2];
-// TODO: Simplify this one
+
 fn bounding_box(triangle: &Triangle<usize>) -> BoxCorners<usize> {
     // let lower_corner = Point { x: 0, y: 0 };
     let upper_corner = Point {
@@ -177,69 +141,72 @@ fn draw_triangle_barycentric(triangle: &Triangle<usize>, image: &mut TGAImage, c
     }
 }
 
-// TODO: Improve ASAP
-type Triangle3d = Vec<Vec3f>;
-fn barycentric3d(triangle: &Triangle3d, point: &Vec3f) -> [f32; 3] {
-    let ab = triangle[0].clone() - triangle[1].clone();
-    let ac = triangle[0].clone() - triangle[2].clone();
-    let ap = triangle[0].clone() - point.clone();
-    let u = ab.clone() ^ ac.clone();
-    let k = Vec3f::new(0., 0., 1.);
-    let m_b = (ap.clone() ^ ac.clone()) * k.clone();
-    let m_c = (ab.clone() ^ ap.clone()) * k.clone();
-    let den = u.clone() * k.clone();
-    if f32::abs(den) > 0.001 {
+type Triangle3d = Vec<Vector3<f64>>;
+fn barycentric3d(triangle: &Triangle3d, point: &Vector3<f64>) -> [f64; 3] {
+    let ab = &triangle[0] - &triangle[1];
+    let ac = &triangle[0] - &triangle[2];
+    let ap = &triangle[0] - point;
+    let u = ab.cross(&ac);
+    let k = Vector3::<f64>::new(0., 0., 1.);
+    let m_b = ap.cross(&ac).dot(&k);
+    let m_c = ab.cross(&ap).dot(&k);
+    let den = u.dot(&k);
+    if libm::fabs(den) > 0.01 {
         [1. - (m_b + m_c) / den, m_b / den, m_c / den]
     } else {
         [-1., 1., 1.]
     }
 }
 
-fn barycentric(triangle: &Triangle3d, point: &Vec3f) -> [f32; 3] {
-    let mut s = [[0. as f32;3];2]; 
-    
-    s[1][0] = triangle[2].y - triangle[0].y; 
+fn barycentric(triangle: &Triangle3d, point: &Vector3<f64>) -> [f64; 3] {
+    let mut s = [[0. as f64; 3]; 2];
+
+    s[1][0] = triangle[2].y - triangle[0].y;
     s[1][1] = triangle[1].y - triangle[0].y;
     s[1][2] = triangle[0].y - point.y;
 
-    s[0][0] = triangle[2].x - triangle[0].x; 
+    s[0][0] = triangle[2].x - triangle[0].x;
     s[0][1] = triangle[1].x - triangle[0].x;
     s[0][2] = triangle[0].x - point.x;
-    
-    let u = Vec3f::new(s[0][0], s[0][1], s[0][2]);
-    let v = Vec3f::new(s[1][0], s[1][1], s[1][2]);
 
-    let w = u^v;
-    if f32::abs(w.z) > 0.01 {
-        [ 1.-(w.x+w.y)/w.z, w.y/w.z, w.x/w.z ]
+    let u = Vector3::new(s[0][0], s[0][1], s[0][2]);
+    let v = Vector3::new(s[1][0], s[1][1], s[1][2]);
+
+    let w = u.cross(&v);
+    if libm::fabs(w.z) > 0.01 {
+        [1. - (w.x + w.y) / w.z, w.y / w.z, w.x / w.z]
     } else {
         [-1., 1., 1.]
     }
 }
 
-fn bounding_box3d(triangle: &Triangle3d) -> [[f32; 2]; 2] {
-    let mut bboxmin = [f32::MAX, f32::MAX];
-    let mut bboxmax = [-f32::MAX, -f32::MAX];
-    let clamp = [WIDTH as f32 - 1., HEIGHT as f32 - 1.];
+fn bounding_box3d(triangle: &Triangle3d) -> [Vector2<usize>; 2] {
+    let mut bboxmin = [f64::MAX, f64::MAX];
+    let mut bboxmax = [-f64::MAX, -f64::MAX];
+    let clamp = [WIDTH as f64 - 1., HEIGHT as f64 - 1.];
     for vertex in triangle {
-        bboxmin[0] = f32::max(0., f32::min(bboxmin[0], vertex.x));
-        bboxmin[1] = f32::max(0., f32::min(bboxmin[1], vertex.y));
-        bboxmax[0] = f32::min(clamp[0], f32::max(bboxmax[0], vertex.x));
-        bboxmax[1] = f32::min(clamp[1], f32::max(bboxmax[1], vertex.y));
+        bboxmin[0] = f64::max(0., f64::min(bboxmin[0], vertex.x));
+        bboxmin[1] = f64::max(0., f64::min(bboxmin[1], vertex.y));
+        bboxmax[0] = f64::min(clamp[0], f64::max(bboxmax[0], vertex.x));
+        bboxmax[1] = f64::min(clamp[1], f64::max(bboxmax[1], vertex.y));
     }
-    [bboxmin, bboxmax]
+
+    [
+        Vector2::new(bboxmin[0] as usize, bboxmin[1] as usize),
+        Vector2::new(bboxmax[0] as usize, bboxmax[1] as usize),
+    ]
 }
 
 fn draw_triangle3d(
     triangle: &Triangle3d,
-    z_buffer: &mut [f32],
+    z_buffer: &mut [f64],
     image: &mut TGAImage,
     color: &TGAColor,
 ) {
     let [bboxmin, bboxmax] = bounding_box3d(&triangle);
-    for pixel_x in bboxmin[0] as usize..=bboxmax[0] as usize {
-        for pixel_y in bboxmin[1] as usize..=bboxmax[1] as usize {
-            let mut point = Vec3f::new(pixel_x as f32, pixel_y as f32, 0.);
+    for pixel_x in bboxmin.x..=bboxmax.x {
+        for pixel_y in bboxmin.y..=bboxmax.y {
+            let mut point = Vector3::new(pixel_x as f64, pixel_y as f64, 0.);
             let [w, u, v] = barycentric3d(&triangle, &point);
             if w < 0. || u < 0. || v < 0. {
                 continue;
@@ -247,117 +214,119 @@ fn draw_triangle3d(
             for (i, coord) in [w, u, v].into_iter().enumerate() {
                 point.z += coord * triangle[i].z;
             }
-            if  z_buffer[pixel_x + pixel_y*WIDTH] < point.z {
-                z_buffer[pixel_x + pixel_y*WIDTH] = point.z;
+            if z_buffer[pixel_x + pixel_y * WIDTH] < point.z {
+                z_buffer[pixel_x + pixel_y * WIDTH] = point.z;
                 image.set(pixel_x, pixel_y, &color);
             }
         }
     }
 }
 
-#[derive(Debug, Clone)]
-struct Vec3f {
-    x: f32,
-    y: f32,
-    z: f32,
-}
-
-impl Vec3f {
-    fn new(x: f32, y: f32, z: f32) -> Self {
-        Self { x, y, z }
-    }
-
-    fn norm(&self) -> f32 {
-        f32::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
-    }
-
-    fn scale_by(&self, a: f32) -> Self {
-        Self {
-            x: a * self.x,
-            y: a * self.y,
-            z: a * self.z,
-        }
-    }
-
-    fn normalize(&self) -> Self {
-        let norm = self.norm();
-        Self {
-            x: self.x / norm,
-            y: self.y / norm,
-            z: self.z / norm,
+fn draw_triangle3d_with_shader(
+    triangle: &Triangle3d,
+    z_buffer: &mut [f64],
+    image: &mut TGAImage,
+    color: &TGAColor,
+    vertex_shader: &fn(&Vertex),
+    fragment_shader: &fn(&Vector3<f64>,&TGAColor)
+) {
+    let [bboxmin, bboxmax] = bounding_box3d(&triangle);
+    for pixel_x in bboxmin.x..=bboxmax.x {
+        for pixel_y in bboxmin.y..=bboxmax.y {
+            let mut point = Vector3::new(pixel_x as f64, pixel_y as f64, 0.);
+            let [w, u, v] = barycentric3d(&triangle, &point);
+            if w < 0. || u < 0. || v < 0. {
+                continue;
+            }
+            for (i, coord) in [w, u, v].into_iter().enumerate() {
+                point.z += coord * triangle[i].z;
+            }
+            if z_buffer[pixel_x + pixel_y * WIDTH] < point.z {
+                z_buffer[pixel_x + pixel_y * WIDTH] = point.z;
+                image.set(pixel_x, pixel_y, &color);
+            }
         }
     }
 }
 
-impl BitXor for Vec3f {
-    type Output = Self;
-    fn bitxor(self, rhs: Vec3f) -> Self {
-        Self {
-            x: self.y * rhs.z - self.z * rhs.y,
-            y: -(self.x * rhs.z - self.z * rhs.x),
-            z: self.x * rhs.y - self.y * rhs.x,
-        }
-    }
+fn viewport(x: f64, y: f64, w: f64, h: f64, d: f64) -> Matrix4<f64> {
+    let viewport = Matrix4::<f64>::from_rows(&[
+        RowVector4::new(w as f64 / 2., 0., 0., (x + w as f64) / 2.),
+        RowVector4::new(0., h as f64 / 2., 0., (y + h as f64) / 2.),
+        RowVector4::new(0., 0., d as f64 / 2., (d as f64) / 2.),
+        RowVector4::new(0., 0., 0., 1.),
+    ]);
+    viewport
 }
 
-impl Mul for Vec3f {
-    type Output = f32;
-    fn mul(self, rhs: Vec3f) -> f32 {
-        self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
-    }
+fn projection(camera: &Vector3<f64>) -> Matrix4<f64> {
+    let mut proj = Matrix4::<f64>::identity();
+    proj[(3, 2)] = 1. / camera.norm(); //-1. / camera.z
+    proj
 }
 
-impl Sub for Vec3f {
-    type Output = Vec3f;
-    fn sub(self, rhs: Self) -> Self {
-        Self {
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-            z: self.z - rhs.z,
-        }
+fn lookat(eye: &Vector3<f64>, center: &Vector3<f64>, up: &Vector3<f64>) -> Matrix4<f64> {
+    let z = (eye - center).normalize();
+    let x = up.cross(&z).normalize();
+    let y = z.cross(&x).normalize();
+    let mut res = Matrix4::<f64>::identity();
+    for i in 0..3 {
+        res[(0, i)] = x[i];
+        res[(1, i)] = y[i];
+        res[(2, i)] = z[i];
+        res[(i, 3)] = -center[i];
     }
+    res
 }
 
-impl Add for Vec3f {
-    type Output = Self;
-    fn add(self, rhs: Self) -> Self {
-        Self {
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
-            z: self.z + rhs.z,
-        }
-    }
-}
-
-fn main() {
-    let mut image = TGAImage::new(WIDTH, HEIGHT, 3);
-    // let red = TGAColor::rgb(255, 0, 0);
-    let white = TGAColor::rgb(255, 255, 255);
-
+fn render_model(mut image: &mut TGAImage) {
     let model = Obj::from_file("./african_head.obj").unwrap();
-    let mut z_buffer = [-f32::MAX; WIDTH * HEIGHT];
+    let mut z_buffer = [-f64::MAX; WIDTH * HEIGHT];
+    let light_dir = Vector3::new(-1., -1., -1.).normalize();
+    let eye = Vector3::new(10., 0., 3.);
+    let center = Vector3::new(0., 0., 0.);
+    let camera = eye - center;
+    let up = Vector3::new(0., 1., 0.);
+    let viewport = viewport(
+        WIDTH as f64 / 8.,
+        HEIGHT as f64 / 8.,
+        WIDTH as f64 * 3. / 4.,
+        HEIGHT as f64 * 3. / 4.,
+        DEPTH as f64,
+    );
+    let projection = projection(&camera);
+    let modelview = lookat(&eye, &center, &up);
+    println!("{}", projection);
+    // TODO: Improve
     for triangle in model.triangles() {
-        let light_dir = Vec3f::new(0., 0., -1.);
-
-        // https://users.rust-lang.org/t/what-is-a-more-efficient-way-to-clear-a-vec/40190
-        let mut screen_triangle = Vec::with_capacity(3); // What's the correct way
-        let mut model_triangle = Vec::with_capacity(3); // What's the correct way
-
+        let mut screen_triangle = Vec::with_capacity(3);
+        let mut model_triangle = Vec::with_capacity(3);
         for vertex in triangle {
-            let x = (vertex.position()[0] + 1.) * (WIDTH as f32) / 2.;
-            let y = (vertex.position()[1] + 1.) * (HEIGHT as f32) / 2.;
-            screen_triangle.push(Vec3f::new(x , y, 0.));
-            model_triangle.push(Vec3f::new(
-                vertex.position()[0],
-                vertex.position()[1],
-                vertex.position()[2],
+            // let x = (vertex.position()[0] + 1.) * (WIDTH as f32) / 2.;
+            // let y = (vertex.position()[1] + 1.) * (HEIGHT as f32) / 2.;
+            let new_triangle = Vector4::<f64>::new(
+                vertex.position()[0] as f64,
+                vertex.position()[1] as f64,
+                vertex.position()[2] as f64,
+                1.,
+            );
+            let perspective = viewport * projection * modelview * new_triangle;
+            // screen_triangle.push(Vector3::<f64>::new(x as f64, y as f64, 0.));
+            screen_triangle.push(Vector3::<f64>::new(
+                perspective.x,
+                perspective.y,
+                perspective.z,
+            ));
+            model_triangle.push(Vector3::<f64>::new(
+                vertex.position()[0] as f64,
+                vertex.position()[1] as f64,
+                vertex.position()[2] as f64,
             ));
         }
-
-        let n = (model_triangle[2].clone() - model_triangle[0].clone())
-            ^ (model_triangle[1].clone() - model_triangle[0].clone());
+        let n = (&model_triangle[2] - &model_triangle[0])
+            .cross(&(model_triangle[1] - model_triangle[0]));
         let n = n.normalize();
-        let intensity = n * light_dir;
+        let intensity = n.dot(&light_dir);
         if intensity > 0. {
             draw_triangle3d(
                 &screen_triangle,
@@ -371,44 +340,28 @@ fn main() {
             );
         }
     }
+}
+
+fn main() {
+    let mut image = TGAImage::new(WIDTH, HEIGHT, 3);
+    let diffuse = TGAImage::from_tga_file("./african_head_diffuse.tga");
+
+    /*let model = Obj::from_file("./cube.obj").unwrap();
+
+    for (i, vertex) in model.triangles().enumerate() {
+        println!("{}:{:?}", i, vertex);
+    }*/
     /*
-    let p0 = Point::new(10, 10);
-    let p1 = Point::new(100, 30);
-    let p2 = Point::new(190, 160);
-    draw_triangle_barycentric(&[p0, p1, p2], &mut image, &white);
+        let e1 = Vector3::new(1., 0., 0.);
+        let e2 = Vector3::new(0., 1., 0.);
+        let e3 = Vector3::new(0., 0., 1.);
+        println!("{:?}", &e3 * 2.);
+        println!("Difference: {:?}", &e2 - &e3);
+        println!("{:?}", &e2.cross(&e1));
+        println!("{:?}", Matrix4::<f64>::identity().try_inverse().unwrap());
+        println!("{:?}", Matrix4::<f64>::identity().transpose());
     */
-    /*
-    let p0 = Point::new(100, 100);
-    let p1 = Point::new(500, 200);
-    let p2 = Point::new(200, 500);
-    draw_triangle(&p0, &p1, &p2, &mut image, &white);
-    let square = bounding_box(&[p0, p1, p2]);
-    //
-    line(
-        &square[0],
-        &Point::new(square[0].x, square[1].y),
-        &mut image,
-        &white,
-    ); // |
-    line(
-        &Point::new(square[1].x, square[0].y),
-        &square[1],
-        &mut image,
-        &white,
-    ); // |
-    line(
-        &square[0],
-        &Point::new(square[1].x, square[0].y),
-        &mut image,
-        &white,
-    ); // _
-    line(
-        &square[1],
-        &Point::new(square[0].x, square[1].y),
-        &mut image,
-        &white,
-    ); // -
-    */
+    render_model(&mut image);
     image.flip_vertically();
     image.write_tga_file("./test.tga", true);
 }
