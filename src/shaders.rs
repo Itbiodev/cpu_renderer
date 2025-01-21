@@ -1,17 +1,30 @@
-use libm;
-use nalgebra::Vector3;
+use nalgebra::{Vector3, Vector4};
+use wavefront::Vertex;
 use tgaimage::TGAColor;
-use wavefront::{Obj, Vertex};
-
-pub fn vertex(vertex: &Vertex) -> Vector3<f64> {
-    Vector3::<f64>::z()
+pub trait Shader {
+    fn vertex_shader(&mut self, vertex: &Vertex) -> Vector4<f64>;
+    fn fragment_shader(self, bar_coords: &Vector3<f64>, color: &mut TGAColor) -> bool;
 }
 
-pub trait FragmentShader {
-    fn fragment(&self, barcoords: &[f64; 3], color: &TGAColor) -> bool;
+pub struct GouradShader {
+    pub varying_intensity: Option<Vector3<f64>>
 }
 
-struct GouraudShader<'a> {
-    face: &'a Vertex<'a>,
-    light_dir: Vector3<f64>,
+/*
+impl Shader for GouradShader {
+    fn vertex_shader(&mut self, vertex: &Vertex) -> Vector4<f64> {
+       let normal = vertex.normal();
+       self.varying_intensity = Some(f64::max(0., normal.dot(&light_dir)));
+       let vec_vertex = vertex.position().to_vec();
+       viewport*projection*modelview*vec_vertex
+    }
+    fn fragment_shader(self, bar_coords: &Vector3<f64>, color: &mut TGAColor) -> bool {
+        if let Some(intensity) = self.varying_intensity {
+            color.r = 255*intensity as u8;
+            color.g = 255*intensity as u8;
+            color.b = 255*intensity as u8;    
+        }
+        false
+    }
 }
+*/

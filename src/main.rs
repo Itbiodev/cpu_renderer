@@ -1,12 +1,13 @@
 mod geometry;
 mod shaders;
 
-use libm::fabs;
+use geometry::Vec3;
 use nalgebra::*;
 use std::cmp::{max, min};
 use std::mem;
 use tgaimage::*;
 use wavefront::{Obj, Vertex};
+// use libm::fabs;
 
 const WIDTH: usize = 800;
 const HEIGHT: usize = 800;
@@ -207,7 +208,7 @@ fn draw_triangle3d(
     for pixel_x in bboxmin.x..=bboxmax.x {
         for pixel_y in bboxmin.y..=bboxmax.y {
             let mut point = Vector3::new(pixel_x as f64, pixel_y as f64, 0.);
-            let [w, u, v] = barycentric3d(&triangle, &point);
+            let [w, u, v] = barycentric(&triangle, &point);
             if w < 0. || u < 0. || v < 0. {
                 continue;
             }
@@ -282,8 +283,8 @@ fn lookat(eye: &Vector3<f64>, center: &Vector3<f64>, up: &Vector3<f64>) -> Matri
 fn render_model(mut image: &mut TGAImage) {
     let model = Obj::from_file("./african_head.obj").unwrap();
     let mut z_buffer = [-f64::MAX; WIDTH * HEIGHT];
-    let light_dir = Vector3::new(-1., -1., -1.).normalize();
-    let eye = Vector3::new(10., 0., 3.);
+    let light_dir = Vector3::new(1., 1., -1.).normalize();
+    let eye = Vector3::new(0., 0., 3.);
     let center = Vector3::new(0., 0., 0.);
     let camera = eye - center;
     let up = Vector3::new(0., 1., 0.);
@@ -302,15 +303,13 @@ fn render_model(mut image: &mut TGAImage) {
         let mut screen_triangle = Vec::with_capacity(3);
         let mut model_triangle = Vec::with_capacity(3);
         for vertex in triangle {
-            // let x = (vertex.position()[0] + 1.) * (WIDTH as f32) / 2.;
-            // let y = (vertex.position()[1] + 1.) * (HEIGHT as f32) / 2.;
-            let new_triangle = Vector4::<f64>::new(
+            let new_vertex = Vector4::<f64>::new(
                 vertex.position()[0] as f64,
                 vertex.position()[1] as f64,
                 vertex.position()[2] as f64,
                 1.,
             );
-            let perspective = viewport * projection * modelview * new_triangle;
+            let perspective = viewport * projection * modelview * new_vertex;
             // screen_triangle.push(Vector3::<f64>::new(x as f64, y as f64, 0.));
             screen_triangle.push(Vector3::<f64>::new(
                 perspective.x,
@@ -323,6 +322,7 @@ fn render_model(mut image: &mut TGAImage) {
                 vertex.position()[2] as f64,
             ));
         }
+        //println!("Perspective Triangle: {:?}", screen_triangle);
         let n = (&model_triangle[2] - &model_triangle[0])
             .cross(&(model_triangle[1] - model_triangle[0]));
         let n = n.normalize();
@@ -344,8 +344,6 @@ fn render_model(mut image: &mut TGAImage) {
 
 fn main() {
     let mut image = TGAImage::new(WIDTH, HEIGHT, 3);
-    let diffuse = TGAImage::from_tga_file("./african_head_diffuse.tga");
-
     /*let model = Obj::from_file("./cube.obj").unwrap();
 
     for (i, vertex) in model.triangles().enumerate() {
